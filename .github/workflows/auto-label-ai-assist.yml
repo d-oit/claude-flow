@@ -1,0 +1,275 @@
+name: Auto Label & AI Assist
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  discussions: write
+  id-token: write
+  actions: read
+  pages: read
+  deployments: read
+  checks: read
+  statuses: read
+  packages: read
+  repository-projects: read
+  actions: write
+  contents: write
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create missing labels (add-only)
+        uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml
+          token: ${{ github.token }}
+          mode: add
+          dry-run: false
+          fail-on-error: true
+
+      - name: Apply regex-based labels
+        uses: github/issue-labeler@v3
+        with:
+          configuration-path: .github/labeler.yml
+          include-title: 1
+          include-body: 1
+          sync-labels: 0
+          repo-token: ${{ github.token }}
+          exclude-labels: 'duplicate,wontfix,invalid,closed'
+          dry-run: false
+
+      - name: Remove duplicate labels
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            
+            const labels = issue.labels.map(label => label.name);
+            const uniqueLabels = [...new Set(labels)];
+            
+            if (labels.length !== uniqueLabels.length) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: uniqueLabels
+              });
+            }
+
+  ai-assist:
+    needs: auto-label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >
+      always() &&
+      (github.event_name == 'issues' || github.event_name == 'pull_request') &&
+      contains(github.event.issue.labels.*.name, 'bug') &&
+      github.event.issue.body != '' &&
+      (github.event.action == 'opened' || github.event.action == 'edited')
+    steps:
+      - name: AI Suggest Follow-up Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueTitle = context.payload.issue.title;
+            const issueBody = context.payload.issue.body || '';
+            const issueLabels = context.payload.issue.labels.map(label => label.name);
+            
+            // Check if issue lacks sufficient information
+            const lacksInfo = !issueBody.includes('steps to reproduce') || 
+                             !issueBody.includes('expected behavior') || 
+                             !issueBody.includes('actual behavior') ||
+                             issueBody.length < 100;
+            
+            if (lacksInfo) {
+              const comment = 'Thank you for reporting this issue! 🙏\n\n' +
+                'To help us understand and resolve this bug more effectively, could you please provide:\n\n' +
+                '1. **Steps to Reproduce** - Detailed steps to reproduce the issue\n' +
+                '2. **Expected Behavior** - What you expected to happen\n' +
+                '3. **Actual Behavior** - What actually happened\n' +
+                '4. **Environment** - Your OS, browser, and any relevant versions\n' +
+                '5. **Additional Context** - Any other relevant information\n\n' +
+                'This information will help us investigate and fix the issue more quickly. If you can provide these details, we\'ll be able to help you better! 🚀';
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+      - name: AI Suggest Enhancement Details
+        if: contains(github.event.issue.labels.*.name, 'enhancement')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueTitle = context.payload.issue.title;
+            const issueBody = context.payload.issue.body || '';
+            
+            // Check if enhancement lacks sufficient details
+            const lacksDetails = !issueBody.includes('use case') || 
+                                !issueBody.includes('proposed solution') ||
+                                issueBody.length < 100;
+            
+            if (lacksDetails) {
+              const comment = 'Thanks for suggesting this enhancement! 💡\n\n' +
+                'To help us evaluate and implement this feature request effectively, could you please provide:\n\n' +
+                '1. **Use Case** - Describe the specific problem this feature would solve\n' +
+                '2. **Proposed Solution** - How you envision this feature working\n' +
+                '3. **Alternatives** - Any alternative approaches you\'ve considered\n' +
+                '4. **Priority** - How important is this feature to you?\n' +
+                '5. **Additional Context** - Any mockups, examples, or additional information\n\n' +
+                'This will help us understand the value and implementation approach better. We appreciate your contribution! 🎯';
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+      - name: AI Suggest Documentation Improvements
+        if: contains(github.event.issue.labels.*.name, 'documentation')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueTitle = context.payload.issue.title;
+            const issueBody = context.payload.issue.body || '';
+            
+            // Check if documentation issue lacks specifics
+            const lacksSpecifics = !issueBody.includes('page') || 
+                                  !issueBody.includes('section') ||
+                                  issueBody.length < 50;
+            
+            if (lacksSpecifics) {
+              const comment = 'Thanks for helping improve our documentation! 📚\n\n' +
+                'To help us locate and fix the documentation issue, could you please provide:\n\n' +
+                '1. **Page/Section** - The specific page or section that needs improvement\n' +
+                '2. **Current Content** - What the current documentation says\n' +
+                '3. **Suggested Improvement** - What you think it should say instead\n' +
+                '4. **Link** - A direct link to the documentation page if possible\n' +
+                '5. **Additional Context** - Any screenshots or examples that would help\n\n' +
+                'This will help us make the documentation more accurate and helpful for everyone! 📖';
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+  triage-assist:
+    needs: [auto-label, ai-assist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    if: always() && (github.event_name == 'issues' || github.event_name == 'pull_request')
+    steps:
+      - name: Add priority labels based on content
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueTitle = context.payload.issue.title;
+            const issueBody = context.payload.issue.body || '';
+            const issueLabels = context.payload.issue.labels.map(label => label.name);
+            
+            // Check for urgent keywords
+            const urgentKeywords = ['urgent', 'critical', 'blocking', 'emergency', 'production'];
+            const hasUrgentKeyword = urgentKeywords.some(keyword => 
+              issueTitle.toLowerCase().includes(keyword) || 
+              issueBody.toLowerCase().includes(keyword)
+            );
+            
+            // Check for high impact keywords
+            const highImpactKeywords = ['breaking', 'major', 'severe', 'important'];
+            const hasHighImpact = highImpactKeywords.some(keyword => 
+              issueTitle.toLowerCase().includes(keyword) || 
+              issueBody.toLowerCase().includes(keyword)
+            );
+            
+            // Check for low complexity keywords
+            const simpleKeywords = ['typo', 'grammar', 'format', 'style', 'cosmetic'];
+            const isSimple = simpleKeywords.some(keyword => 
+              issueTitle.toLowerCase().includes(keyword) || 
+              issueBody.toLowerCase().includes(keyword)
+            );
+            
+            const labelsToAdd = [];
+            
+            if (hasUrgentKeyword && !issueLabels.includes('urgent')) {
+              labelsToAdd.push('urgent');
+            }
+            
+            if (hasHighImpact && !issueLabels.includes('high-priority')) {
+              labelsToAdd.push('high-priority');
+            }
+            
+            if (isSimple && !issueLabels.includes('low-complexity')) {
+              labelsToAdd.push('low-complexity');
+            }
+            
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labelsToAdd
+              });
+            }
+
+      - name: Suggest assignee for good first issues
+        if: contains(github.event.issue.labels.*.name, 'good first issue')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // This could be enhanced to suggest specific team members
+            // For now, it just adds a comment encouraging contribution
+            const comment = 'This is marked as a "good first issue"! 🌟\n\n' +
+              'This is a great opportunity for new contributors to get involved. If you\'re new to the project and would like to work on this issue:\n\n' +
+              '1. **Claim the issue** - Comment below to let others know you\'re working on it\n' +
+              '2. **Get started** - Check our [Contributing Guide](CONTRIBUTING.md) for setup instructions\n' +
+              '3. **Ask questions** - Don\'t hesitate to ask if you need help or clarification\n' +
+              '4. **Submit PR** - We\'re here to help you through the process\n\n' +
+              'Happy coding! 🚀';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+
+  cleanup:
+    needs: [auto-label, ai-assist, triage-assist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: always()
+    steps:
+      - name: Log workflow completion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('Auto-label and AI assist workflow completed for issue #' + context.issue.number);
+            console.log('Labels: ' + context.payload.issue.labels.map(label => label.name).join(', '));

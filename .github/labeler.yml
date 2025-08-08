@@ -1,0 +1,110 @@
+# Regex-based auto-labeling configuration
+# This file defines rules for automatically labeling issues based on title and body content
+
+# Bug-related patterns
+- label: 'bug'
+  any:
+    - title: /(?i)(bug|error|exception|crash|fail|broken|issue|problem|doesn'?t work|not working)/
+    - body: /(?i)(bug|error|exception|crash|fail|broken|issue|problem|doesn'?t work|not working)/
+
+# Enhancement/Feature patterns
+- label: 'enhancement'
+  any:
+    - title: /(?i)(feature|enhancement|improvement|suggestion|request|add|would like|should)/
+    - body: /(?i)(feature|enhancement|improvement|suggestion|request|add|would like|should)/
+
+# Documentation patterns
+- label: 'documentation'
+  any:
+    - title: /(?i)(docs?|documentation|readme|guide|tutorial|manual|wiki)/
+    - body: /(?i)(docs?|documentation|readme|guide|tutorial|manual|wiki)/
+
+# Question patterns
+- label: 'question'
+  any:
+    - title: /(?i)(how|what|why|when|where|can|could|would|should|is|are|does|do)/
+    - body: /(?i)(how|what|why|when|where|can|could|would|should|is|are|does|do)/
+
+# Performance patterns
+- label: 'performance'
+  any:
+    - title: /(?i)(slow|performance|speed|latency|throughput|optimization|optimize|efficient)/
+    - body: /(?i)(slow|performance|speed|latency|throughput|optimization|optimize|efficient)/
+
+# Security patterns
+- label: 'security'
+  any:
+    - title: /(?i)(security|vulnerability|exploit|attack|breach|sensitive|auth|password|token)/
+    - body: /(?i)(security|vulnerability|exploit|attack|breach|sensitive|auth|password|token)/
+
+# UI/UX patterns
+- label: 'ui'
+  any:
+    - title: /(?i)(ui|ux|interface|design|layout|appearance|visual|frontend|display)/
+    - body: /(?i)(ui|ux|interface|design|layout|appearance|visual|frontend|display)/
+
+# API patterns
+- label: 'api'
+  any:
+    - title: /(?i)(api|endpoint|route|rest|graphql|request|response|client|server)/
+    - body: /(?i)(api|endpoint|route|rest|graphql|request|response|client|server)/
+
+# Build/CI patterns
+- label: 'build'
+  any:
+    - title: /(?i)(build|ci|cd|pipeline|deploy|compilation|compile|make|gradle|npm|yarn)/
+    - body: /(?i)(build|ci|cd|pipeline|deploy|compilation|compile|make|gradle|npm|yarn)/
+
+# Test patterns
+- label: 'test'
+  any:
+    - title: /(?i)(test|testing|unit|integration|e2e|mock|stub|coverage)/
+    - body: /(?i)(test|testing|unit|integration|e2e|mock|stub|coverage)/
+
+# Refactoring patterns
+- label: 'refactor'
+  any:
+    - title: /(?i)(refactor|refactoring|cleanup|clean|reorganize|restructure|simplify)/
+    - body: /(?i)(refactor|refactoring|cleanup|clean|reorganize|restructure|simplify)/
+
+# Breaking change patterns
+- label: 'breaking'
+  any:
+    - title: /(?i)(breaking|breaking change|incompatible|deprecated|remove|delete|drop)/
+    - body: /(?i)(breaking|breaking change|incompatible|deprecated|remove|delete|drop)/
+
+# Good first issue patterns
+- label: 'good first issue'
+  any:
+    - title: /(?i)(good first issue|good for beginners|easy|simple|beginner-friendly)/
+    - body: /(?i)(good first issue|good for beginners|easy|simple|beginner-friendly)/
+
+# Help wanted patterns
+- label: 'help wanted'
+  any:
+    - title: /(?i)(help wanted|help needed|looking for help|collaboration|contribute)/
+    - body: /(?i)(help wanted|help needed|looking for help|collaboration|contribute)/
+
+# Reproducible patterns
+- label: 'reproducible'
+  any:
+    - title: /(?i)(reproducible|reproduce|steps|reproduction|minimal|example|case)/
+    - body: /(?i)(reproducible|reproduce|steps|reproduction|minimal|example|case)/
+
+# Experimental patterns
+- label: 'experimental'
+  any:
+    - title: /(?i)(experimental|prototype|proof of concept|poc|beta|alpha|testing)/
+    - body: /(?i)(experimental|prototype|proof of concept|poc|beta|alpha|testing)/
+
+# Configuration patterns
+- label: 'config'
+  any:
+    - title: /(?i)(config|configuration|settings|setup|environment|env|variable)/
+    - body: /(?i)(config|configuration|settings|setup|environment|env|variable)/
+
+# Dependencies patterns
+- label: 'dependencies'
+  any:
+    - title: /(?i)(dependency|dependencies|package|npm|pip|cargo|gem|requirement)/
+    - body: /(?i)(dependency|dependencies|package|npm|pip|cargo|gem|requirement)/

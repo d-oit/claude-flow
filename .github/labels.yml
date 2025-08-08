@@ -1,0 +1,34 @@
+# Auto-generated labels for issue management
+# This file is synced with the repository's labels
+
+bug: Bug report or issue
+enhancement: Feature request or improvement
+documentation: Documentation updates or fixes
+question: User question or inquiry
+good first issue: Good for newcomers
+help wanted: Help needed from the community
+duplicate: Duplicate of another issue
+wontfix: Will not be implemented
+invalid: Not a valid issue
+needs information: More information required
+in progress: Currently being worked on
+blocked: Blocked by external factors
+review: Needs review
+testing: Requires testing
+feature: New feature request
+refactor: Code refactoring
+performance: Performance related
+security: Security related
+ui: User interface changes
+api: API related changes
+config: Configuration related
+dependencies: Dependencies related
+build: Build system related
+test: Test related
+chore: Maintenance tasks
+reproducible: Reproducible issue
+breaking: Breaking change
+experimental: Experimental feature
+stable: Stable release
+deprecated: Deprecated functionality
+migration: Migration related
