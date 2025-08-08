@@ -1,0 +1,123 @@
+name: CodeGuardian CI
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1' # Weekly full scan
+
+jobs:
+  codeguardian-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Need full history for diff
+    
+    - name: Install CodeGuardian
+      run: |
+        # Replace with actual installation method
+        cargo install --git https://github.com/your-org/codeguardian
+    
+    - name: Run CodeGuardian (PR diff-only)
+      run: |
+        # Diff-only mode for PRs - fast and focused feedback
+        codeguardian check . \
+          --diff origin/main..HEAD \
+          --format json \
+          --out results.json \
+          --emit-md report.md \
+          --emit-gh \
+          --repo ${{ github.repository }} \
+          --gh-mode checklist \
+          --labels "codeguardian,automated,pr-${{ github.event.number }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: codeguardian-pr-results
+        path: |
+          results.json
+          report.md
+
+  codeguardian-full:
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install CodeGuardian
+      run: |
+        # Replace with actual installation method
+        cargo install --git https://github.com/your-org/codeguardian
+    
+    - name: Run CodeGuardian (Full scan)
+      run: |
+        # Full repository scan for scheduled jobs and main branch pushes
+        codeguardian check . \
+          --format json \
+          --out results.json \
+          --emit-md report.md \
+          --emit-gh \
+          --repo ${{ github.repository }} \
+          --gh-mode checklist \
+          --labels "codeguardian,automated,full-scan" \
+          --fail-on-issues
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: codeguardian-full-results
+        path: |
+          results.json
+          report.md
+
+  codeguardian-baseline:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install CodeGuardian
+      run: |
+        cargo install --git https://github.com/your-org/codeguardian
+    
+    - name: Update baseline
+      run: |
+        codeguardian check . \
+          --format json \
+          --out baseline.json
+        
+        # Commit updated baseline if it changed
+        if ! git diff --quiet baseline.json 2>/dev/null; then
+          git config user.name "CodeGuardian Bot"
+          git config user.email "codeguardian@example.com"
+          git add baseline.json
+          git commit -m "chore: update CodeGuardian baseline [skip ci]"
+          git push
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

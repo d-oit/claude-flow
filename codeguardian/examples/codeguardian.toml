@@ -1,0 +1,147 @@
+# CodeGuardian Configuration
+# Schema version for configuration compatibility
+version = "1.0.0"
+
+[general]
+# Follow symlinks (security: false by default)
+follow_symlinks = false
+
+# Maximum file size to analyze (bytes)
+max_file_size = 10485760  # 10MB
+
+# Parallel workers (0 = auto-detect)
+parallel_workers = 0
+
+# Paths to ignore (glob patterns)
+ignore_paths = [
+    ".git/**",
+    "node_modules/**", 
+    "target/**",
+    "dist/**",
+    "build/**",
+    "*.min.js",
+    "*.bundle.js"
+]
+
+# File extensions to always include
+include_extensions = [
+    "rs", "js", "ts", "jsx", "tsx", "py", "java", 
+    "cpp", "c", "h", "hpp", "go", "rb", "php"
+]
+
+[analyzers.integrity]
+enabled = true
+
+# Hash algorithm: "blake3" (default), "sha256", "sha512"
+hash_algorithm = "blake3"
+
+# Skip vendor/generated directories
+skip_vendor_dirs = true
+
+# Normalize line endings for text files
+normalize_eol = true
+
+[analyzers.lint_drift]
+enabled = true
+
+# Canonicalize JSON/YAML/TOML (stable ordering)
+canonicalize_configs = true
+
+# Baseline file for drift detection
+baseline_file = "codeguardian-baseline.json"
+
+# Severity for missing config files
+missing_config_severity = "medium"
+
+[analyzers.non_production]
+enabled = true
+
+# Age threshold for TODO/FIXME escalation (days)
+todo_escalation_days = 30
+
+# Patterns for detecting secrets (regex)
+secret_patterns = [
+    "(?i)(password|secret|token|api[_-]?key)\\s*[:=]\\s*['\"]?([a-zA-Z0-9_\\-]{8,})['\"]?",
+    "(?i)authorization\\s*:\\s*bearer\\s+([a-zA-Z0-9_\\-\\.]{20,})"
+]
+
+# Suppression support
+[suppression]
+# Inline suppression format
+inline_format = "codeguardian:ignore-next[{rule}] reason=\"{reason}\""
+
+# Require justification for high-severity suppressions
+require_reason_for_high = true
+
+# .codeguardianignore file support
+ignore_file = ".codeguardianignore"
+
+[github]
+# Default issue labels
+default_labels = ["codeguardian", "automated"]
+
+# Issue title prefix
+title_prefix = "CodeGuardian: "
+
+# Maximum issue body size before switching to children mode
+max_body_size = 60000
+
+# Auto-switch to children mode above this threshold
+children_mode_threshold = 50
+
+[hooks]
+# Optional: Run external tools and convert failures to issues
+# All hooks run in sandbox with timeouts
+
+# Example Rust hooks
+[hooks.compile]
+cmd = "cargo build --locked --color never"
+timeout_s = 300
+severity = "high"
+
+[hooks.test]
+cmd = "cargo test --color never"
+timeout_s = 600
+severity = "medium"
+
+[hooks.clippy]
+cmd = "cargo clippy -- -D warnings"
+timeout_s = 300
+severity = "medium"
+
+[hooks.rustfmt]
+cmd = "cargo fmt -- --check"
+timeout_s = 120
+severity = "low"
+
+# Example JavaScript/TypeScript hooks
+[hooks.eslint]
+cmd = "npx eslint . --format json"
+timeout_s = 180
+severity = "medium"
+enabled = false  # Disabled by default
+
+[hooks.prettier]
+cmd = "npx prettier --check ."
+timeout_s = 120
+severity = "low"
+enabled = false
+
+# Security and performance settings
+[security]
+# Redact secrets in logs and reports
+redact_secrets = true
+
+# Allowed paths (empty = no restriction)
+allowed_paths = []
+
+# Resource limits
+[limits]
+# Global timeout for entire scan (seconds)
+global_timeout_s = 3600
+
+# Per-file timeout (seconds)
+per_file_timeout_s = 30
+
+# Memory limit per worker (MB)
+memory_limit_mb = 512
