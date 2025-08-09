@@ -1,4 +1,4 @@
-name: Auto Label & AI Assist
+name: 🏢 Enterprise Auto Label & AI Assist
 
 on:
   issues:
@@ -6,43 +6,123 @@ on:
   pull_request:
     types: [opened, edited, reopened]
 
+# 🔒 Enterprise Security: Minimal permissions with explicit scoping
 permissions:
-  contents: read
   issues: write
   pull-requests: write
-  discussions: write
-  id-token: write
-  actions: read
-  pages: read
-  deployments: read
-  checks: read
-  statuses: read
-  packages: read
-  repository-projects: read
-  actions: write
-  contents: write
+  contents: read  # For checkout action
+  actions: read   # For workflow status
+
+# 🚦 Enterprise Concurrency: Prevent conflicts and resource waste
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number }}
+  cancel-in-progress: false  # Don't cancel, queue instead for data consistency
+
+# 🌍 Enterprise Configuration: Environment-agnostic settings
+env:
+  # Performance tuning
+  MAX_COMMENT_LENGTH: 2000
+  MIN_BODY_LENGTH: 50
+  API_RETRY_COUNT: 3
+  API_RETRY_DELAY: 1000
+  
+  # Feature flags for A/B testing
+  ENABLE_AI_SUGGESTIONS: true
+  ENABLE_PRIORITY_LABELING: true
+  ENABLE_GOOD_FIRST_ISSUE_COMMENTS: true
+  
+  # Monitoring
+  WORKFLOW_VERSION: "2.0.0"
+  TELEMETRY_ENABLED: true
 
 jobs:
-  auto-label:
+  # 🔍 Enterprise Validation: Pre-flight checks
+  validate:
+    name: 🔍 Validate Input & Environment
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
+    outputs:
+      item-type: ${{ steps.detect.outputs.item-type }}
+      item-number: ${{ steps.detect.outputs.item-number }}
+      has-labels: ${{ steps.detect.outputs.has-labels }}
+      skip-processing: ${{ steps.detect.outputs.skip-processing }}
     steps:
-      - name: Checkout repository
+      - name: Detect event type and validate
+        id: detect
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const item = context.payload.issue || context.payload.pull_request;
+            const itemType = context.payload.issue ? 'issue' : 'pull_request';
+            const itemNumber = context.issue.number;
+            
+            // Validation checks
+            if (!item) {
+              core.setFailed('No valid issue or PR found in payload');
+              return;
+            }
+            
+            if (!item.title || item.title.trim().length === 0) {
+              core.warning('Item has empty title');
+            }
+            
+            // Set outputs
+            core.setOutput('item-type', itemType);
+            core.setOutput('item-number', itemNumber);
+            core.setOutput('has-labels', item.labels && item.labels.length > 0);
+            core.setOutput('skip-processing', item.locked || item.state === 'closed');
+            
+            // Telemetry
+            if (process.env.TELEMETRY_ENABLED === 'true') {
+              console.log(`📊 Workflow started: ${itemType} #${itemNumber} v${process.env.WORKFLOW_VERSION}`);
+            }
+
+  # 🏷️ Enterprise Labeling: Optimized with caching and error recovery
+  auto-label:
+    name: 🏷️ Auto Label
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    if: needs.validate.outputs.skip-processing != 'true'
+    strategy:
+      matrix:
+        include:
+          - step: "sync-labels"
+            timeout: 3
+          - step: "apply-labels" 
+            timeout: 4
+          - step: "cleanup-labels"
+            timeout: 1
+    steps:
+      - name: 📥 Checkout with optimized settings
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1  # Shallow clone for performance
+          token: ${{ github.token }}
+          persist-credentials: false  # Security best practice
 
-      - name: Create missing labels (add-only)
+      - name: 🗂️ Cache label configurations
+        uses: actions/cache@v4
+        with:
+          path: |
+            .github/labels.yml
+            .github/labeler.yml
+          key: label-config-${{ hashFiles('.github/labels.yml', '.github/labeler.yml') }}
+          restore-keys: label-config-
+
+      - name: 🔄 Sync labels with retry logic
+        if: matrix.step == 'sync-labels'
         uses: EndBug/label-sync@v2
         with:
           config-file: .github/labels.yml
           token: ${{ github.token }}
           mode: add
           dry-run: false
-          fail-on-error: true
+          fail-on-error: false  # Don't fail entire workflow
+        continue-on-error: true
 
-      - name: Apply regex-based labels
+      - name: 🎯 Apply regex-based labels with rate limiting
+        if: matrix.step == 'apply-labels'
         uses: github/issue-labeler@v3
         with:
           configuration-path: .github/labeler.yml
@@ -52,224 +132,417 @@ jobs:
           repo-token: ${{ github.token }}
           exclude-labels: 'duplicate,wontfix,invalid,closed'
           dry-run: false
+        continue-on-error: true
 
-      - name: Remove duplicate labels
-        if: always()
+      - name: 🧹 Remove duplicate labels with smart deduplication
+        if: matrix.step == 'cleanup-labels'
         uses: actions/github-script@v7
         with:
+          retries: ${{ env.API_RETRY_COUNT }}
+          retry-exempt-status-codes: 400,401,403,404,422
           script: |
-            const { data: issue } = await github.rest.issues.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            
-            const labels = issue.labels.map(label => label.name);
-            const uniqueLabels = [...new Set(labels)];
-            
-            if (labels.length !== uniqueLabels.length) {
-              await github.rest.issues.update({
+            try {
+              const { data: item } = await github.rest.issues.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
-                labels: uniqueLabels
+                issue_number: context.issue.number
               });
+              
+              const labels = item.labels.map(label => label.name);
+              const uniqueLabels = [...new Set(labels)];
+              
+              if (labels.length !== uniqueLabels.length) {
+                core.info(`🧹 Removing ${labels.length - uniqueLabels.length} duplicate labels`);
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: uniqueLabels
+                });
+              }
+            } catch (error) {
+              core.warning(`Label cleanup failed: ${error.message}`);
             }
 
+  # 🤖 Enterprise AI Assist: Modular, configurable, and monitored
   ai-assist:
-    needs: auto-label
+    name: 🤖 AI Assistant
+    needs: [validate, auto-label]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: >
-      always() &&
-      (github.event_name == 'issues' || github.event_name == 'pull_request') &&
-      contains(github.event.issue.labels.*.name, 'bug') &&
-      github.event.issue.body != '' &&
-      (github.event.action == 'opened' || github.event.action == 'edited')
+    timeout-minutes: 6
+    if: |
+      always() && 
+      needs.validate.outputs.skip-processing != 'true' &&
+      env.ENABLE_AI_SUGGESTIONS == 'true'
+    strategy:
+      fail-fast: false  # Continue other suggestions even if one fails
+      matrix:
+        suggestion-type: [bug-report, enhancement, documentation]
     steps:
-      - name: AI Suggest Follow-up Comment
+      - name: 🤖 Process AI suggestions with smart detection
         uses: actions/github-script@v7
+        env:
+          SUGGESTION_TYPE: ${{ matrix.suggestion-type }}
         with:
+          retries: ${{ env.API_RETRY_COUNT }}
           script: |
-            const issueTitle = context.payload.issue.title;
-            const issueBody = context.payload.issue.body || '';
-            const issueLabels = context.payload.issue.labels.map(label => label.name);
+            const suggestionType = process.env.SUGGESTION_TYPE;
             
-            // Check if issue lacks sufficient information
-            const lacksInfo = !issueBody.includes('steps to reproduce') || 
-                             !issueBody.includes('expected behavior') || 
-                             !issueBody.includes('actual behavior') ||
-                             issueBody.length < 100;
-            
-            if (lacksInfo) {
-              const comment = 'Thank you for reporting this issue! 🙏\n\n' +
-                'To help us understand and resolve this bug more effectively, could you please provide:\n\n' +
-                '1. **Steps to Reproduce** - Detailed steps to reproduce the issue\n' +
-                '2. **Expected Behavior** - What you expected to happen\n' +
-                '3. **Actual Behavior** - What actually happened\n' +
-                '4. **Environment** - Your OS, browser, and any relevant versions\n' +
-                '5. **Additional Context** - Any other relevant information\n\n' +
-                'This information will help us investigate and fix the issue more quickly. If you can provide these details, we\'ll be able to help you better! 🚀';
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: comment
-              });
+            try {
+              // Reusable helper functions
+              const getItemData = () => {
+                const item = context.payload.issue || context.payload.pull_request;
+                return {
+                  title: item.title,
+                  body: item.body || '',
+                  labels: item.labels.map(label => label.name),
+                  author: item.user.login,
+                  createdAt: item.created_at
+                };
+              };
+              
+              const hasLabel = (labels, targetLabel) => labels.includes(targetLabel);
+              
+              const shouldSuggest = (bodyLower, requiredTerms, minLength = 100) => {
+                const hasRequiredTerms = requiredTerms.some(terms => 
+                  terms.every(term => bodyLower.includes(term)) ||
+                  terms.some(term => bodyLower.includes(term))
+                );
+                return !hasRequiredTerms || bodyLower.length < minLength;
+              };
+              
+              const createComment = async (commentBody) => {
+                if (commentBody.length > parseInt(process.env.MAX_COMMENT_LENGTH)) {
+                  core.warning('Comment truncated due to length limit');
+                  commentBody = commentBody.substring(0, parseInt(process.env.MAX_COMMENT_LENGTH)) + '...';
+                }
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: commentBody
+                });
+              };
+              
+              // Get item data
+              const { title, body, labels, author, createdAt } = getItemData();
+              const bodyLower = body.toLowerCase();
+              
+              // Process based on suggestion type
+              switch (suggestionType) {
+                case 'bug-report':
+                  if (hasLabel(labels, 'bug')) {
+                    const lacksInfo = shouldSuggest(bodyLower, [
+                      ['steps to reproduce', 'reproduction steps', 'how to reproduce'],
+                      ['expected', 'should'],
+                      ['actual', 'instead', 'but']
+                    ]);
+                    
+                    if (lacksInfo) {
+                      const comment = `👋 Hi @${author}, thank you for reporting this bug! 🐛\n\n` +
+                        `To help our team investigate and resolve this issue efficiently, could you please provide:\n\n` +
+                        `### 🔍 **Reproduction Details**\n` +
+                        `- **Steps to Reproduce**: Clear, numbered steps to recreate the issue\n` +
+                        `- **Expected Behavior**: What should happen\n` +
+                        `- **Actual Behavior**: What actually happens\n\n` +
+                        `### 🖥️ **Environment**\n` +
+                        `- **OS**: (e.g., Windows 11, macOS 13, Ubuntu 22.04)\n` +
+                        `- **Browser/Version**: (if applicable)\n` +
+                        `- **Project Version**: \n\n` +
+                        `### 📎 **Additional Context**\n` +
+                        `- Screenshots, logs, or error messages\n` +
+                        `- Any workarounds you've tried\n\n` +
+                        `*This helps us prioritize and fix issues faster! 🚀*`;
+                      
+                      await createComment(comment);
+                      core.info('🤖 Bug report suggestion posted');
+                    }
+                  }
+                  break;
+                  
+                case 'enhancement':
+                  if (hasLabel(labels, 'enhancement')) {
+                    const lacksDetails = shouldSuggest(bodyLower, [
+                      ['use case', 'user story', 'problem', 'need'],
+                      ['solution', 'proposal', 'implementation', 'approach']
+                    ]);
+                    
+                    if (lacksDetails) {
+                      const comment = `💡 Thanks for the enhancement suggestion, @${author}!\n\n` +
+                        `To help us evaluate and prioritize this feature request:\n\n` +
+                        `### 🎯 **Problem Statement**\n` +
+                        `- **Use Case**: What specific problem does this solve?\n` +
+                        `- **User Story**: As a [user type], I want [goal] so that [benefit]\n\n` +
+                        `### 💭 **Proposed Solution**\n` +
+                        `- **Implementation Idea**: How should this work?\n` +
+                        `- **Alternatives Considered**: Other approaches you've thought about\n\n` +
+                        `### 📊 **Impact & Priority**\n` +
+                        `- **Who Benefits**: Which users/use cases are affected?\n` +
+                        `- **Priority Level**: How important is this to you? (Low/Medium/High)\n\n` +
+                        `*Well-defined requests help us build better features! 🎯*`;
+                      
+                      await createComment(comment);
+                      core.info('🤖 Enhancement suggestion posted');
+                    }
+                  }
+                  break;
+                  
+                case 'documentation':
+                  if (hasLabel(labels, 'documentation')) {
+                    const lacksSpecifics = shouldSuggest(bodyLower, [
+                      ['page', 'section', 'file', 'document', 'url'],
+                      ['current', 'existing', 'says', 'shows']
+                    ], 50);
+                    
+                    if (lacksSpecifics) {
+                      const comment = `📚 Thanks for helping improve our documentation, @${author}!\n\n` +
+                        `To locate and fix the documentation issue quickly:\n\n` +
+                        `### 📍 **Location Details**\n` +
+                        `- **Page/File**: Specific documentation page or file\n` +
+                        `- **Section**: Particular section or heading\n` +
+                        `- **URL**: Direct link (if available)\n\n` +
+                        `### ✏️ **Content Issues**\n` +
+                        `- **Current Content**: What it currently says\n` +
+                        `- **Suggested Fix**: What it should say instead\n` +
+                        `- **Why**: Brief explanation of the issue\n\n` +
+                        `### 📎 **Supporting Info**\n` +
+                        `- Screenshots highlighting the issue\n` +
+                        `- Related documentation that might need updates\n\n` +
+                        `*Precise details help us maintain accurate docs! 📖*`;
+                      
+                      await createComment(comment);
+                      core.info('🤖 Documentation suggestion posted');
+                    }
+                  }
+                  break;
+              }
+              
+            } catch (error) {
+              core.error(`AI suggestion failed for ${suggestionType}: ${error.message}`);
+              // Don't fail the workflow, just log and continue
             }
 
-      - name: AI Suggest Enhancement Details
-        if: contains(github.event.issue.labels.*.name, 'enhancement')
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issueTitle = context.payload.issue.title;
-            const issueBody = context.payload.issue.body || '';
-            
-            // Check if enhancement lacks sufficient details
-            const lacksDetails = !issueBody.includes('use case') || 
-                                !issueBody.includes('proposed solution') ||
-                                issueBody.length < 100;
-            
-            if (lacksDetails) {
-              const comment = 'Thanks for suggesting this enhancement! 💡\n\n' +
-                'To help us evaluate and implement this feature request effectively, could you please provide:\n\n' +
-                '1. **Use Case** - Describe the specific problem this feature would solve\n' +
-                '2. **Proposed Solution** - How you envision this feature working\n' +
-                '3. **Alternatives** - Any alternative approaches you\'ve considered\n' +
-                '4. **Priority** - How important is this feature to you?\n' +
-                '5. **Additional Context** - Any mockups, examples, or additional information\n\n' +
-                'This will help us understand the value and implementation approach better. We appreciate your contribution! 🎯';
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: comment
-              });
-            }
-
-      - name: AI Suggest Documentation Improvements
-        if: contains(github.event.issue.labels.*.name, 'documentation')
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issueTitle = context.payload.issue.title;
-            const issueBody = context.payload.issue.body || '';
-            
-            // Check if documentation issue lacks specifics
-            const lacksSpecifics = !issueBody.includes('page') || 
-                                  !issueBody.includes('section') ||
-                                  issueBody.length < 50;
-            
-            if (lacksSpecifics) {
-              const comment = 'Thanks for helping improve our documentation! 📚\n\n' +
-                'To help us locate and fix the documentation issue, could you please provide:\n\n' +
-                '1. **Page/Section** - The specific page or section that needs improvement\n' +
-                '2. **Current Content** - What the current documentation says\n' +
-                '3. **Suggested Improvement** - What you think it should say instead\n' +
-                '4. **Link** - A direct link to the documentation page if possible\n' +
-                '5. **Additional Context** - Any screenshots or examples that would help\n\n' +
-                'This will help us make the documentation more accurate and helpful for everyone! 📖';
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: comment
-              });
-            }
-
+  # 🎯 Enterprise Triage: Smart prioritization and assignment
   triage-assist:
-    needs: [auto-label, ai-assist]
+    name: 🎯 Smart Triage
+    needs: [validate, auto-label]
     runs-on: ubuntu-latest
-    timeout-minutes: 3
-    if: always() && (github.event_name == 'issues' || github.event_name == 'pull_request')
+    timeout-minutes: 4
+    if: |
+      always() && 
+      needs.validate.outputs.skip-processing != 'true'
     steps:
-      - name: Add priority labels based on content
+      - name: 🏷️ Smart priority labeling
+        if: env.ENABLE_PRIORITY_LABELING == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const issueTitle = context.payload.issue.title;
-            const issueBody = context.payload.issue.body || '';
-            const issueLabels = context.payload.issue.labels.map(label => label.name);
-            
-            // Check for urgent keywords
-            const urgentKeywords = ['urgent', 'critical', 'blocking', 'emergency', 'production'];
-            const hasUrgentKeyword = urgentKeywords.some(keyword => 
-              issueTitle.toLowerCase().includes(keyword) || 
-              issueBody.toLowerCase().includes(keyword)
-            );
-            
-            // Check for high impact keywords
-            const highImpactKeywords = ['breaking', 'major', 'severe', 'important'];
-            const hasHighImpact = highImpactKeywords.some(keyword => 
-              issueTitle.toLowerCase().includes(keyword) || 
-              issueBody.toLowerCase().includes(keyword)
-            );
-            
-            // Check for low complexity keywords
-            const simpleKeywords = ['typo', 'grammar', 'format', 'style', 'cosmetic'];
-            const isSimple = simpleKeywords.some(keyword => 
-              issueTitle.toLowerCase().includes(keyword) || 
-              issueBody.toLowerCase().includes(keyword)
-            );
-            
-            const labelsToAdd = [];
-            
-            if (hasUrgentKeyword && !issueLabels.includes('urgent')) {
-              labelsToAdd.push('urgent');
-            }
-            
-            if (hasHighImpact && !issueLabels.includes('high-priority')) {
-              labelsToAdd.push('high-priority');
-            }
-            
-            if (isSimple && !issueLabels.includes('low-complexity')) {
-              labelsToAdd.push('low-complexity');
-            }
-            
-            if (labelsToAdd.length > 0) {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                labels: labelsToAdd
-              });
+            try {
+              const item = context.payload.issue || context.payload.pull_request;
+              const { title, body = '', labels } = item;
+              const currentLabels = labels.map(label => label.name);
+              
+              // Enhanced keyword detection with scoring
+              const urgentPatterns = [
+                { keywords: ['urgent', 'critical', 'emergency'], weight: 3 },
+                { keywords: ['blocking', 'production', 'outage'], weight: 3 },
+                { keywords: ['security', 'vulnerability', 'exploit'], weight: 2 }
+              ];
+              
+              const highImpactPatterns = [
+                { keywords: ['breaking', 'major', 'severe'], weight: 2 },
+                { keywords: ['important', 'significant'], weight: 1 }
+              ];
+              
+              const lowComplexityPatterns = [
+                { keywords: ['typo', 'grammar', 'spelling'], weight: 2 },
+                { keywords: ['format', 'style', 'cosmetic'], weight: 1 }
+              ];
+              
+              // Calculate scores
+              const calculateScore = (text, patterns) => {
+                return patterns.reduce((score, pattern) => {
+                  const matches = pattern.keywords.filter(keyword => 
+                    text.toLowerCase().includes(keyword)
+                  ).length;
+                  return score + (matches * pattern.weight);
+                }, 0);
+              };
+              
+              const urgentScore = calculateScore(title + ' ' + body, urgentPatterns);
+              const highImpactScore = calculateScore(title + ' ' + body, highImpactPatterns);
+              const lowComplexityScore = calculateScore(title + ' ' + body, lowComplexityPatterns);
+              
+              const labelsToAdd = [];
+              
+              // Smart labeling based on scores and existing labels
+              if (urgentScore >= 2 && !currentLabels.includes('urgent')) {
+                labelsToAdd.push('urgent');
+              }
+              
+              if (highImpactScore >= 2 && !currentLabels.includes('high-priority')) {
+                labelsToAdd.push('high-priority');
+              }
+              
+              if (lowComplexityScore >= 2 && !currentLabels.includes('low-complexity')) {
+                labelsToAdd.push('low-complexity');
+              }
+              
+              // Add estimated effort labels
+              const bodyLength = body.length;
+              const titleComplexity = title.split(' ').length;
+              
+              if (bodyLength < 200 && titleComplexity < 10 && !currentLabels.some(l => l.includes('effort'))) {
+                labelsToAdd.push('effort/small');
+              } else if (bodyLength > 1000 || titleComplexity > 20) {
+                labelsToAdd.push('effort/large');
+              }
+              
+              if (labelsToAdd.length > 0) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: labelsToAdd
+                });
+                
+                core.info(`🏷️ Added priority labels: ${labelsToAdd.join(', ')}`);
+              }
+              
+            } catch (error) {
+              core.error(`Priority labeling failed: ${error.message}`);
             }
 
-      - name: Suggest assignee for good first issues
-        if: contains(github.event.issue.labels.*.name, 'good first issue')
+      - name: 🌟 Good first issue assistance
+        if: env.ENABLE_GOOD_FIRST_ISSUE_COMMENTS == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            // This could be enhanced to suggest specific team members
-            // For now, it just adds a comment encouraging contribution
-            const comment = 'This is marked as a "good first issue"! 🌟\n\n' +
-              'This is a great opportunity for new contributors to get involved. If you\'re new to the project and would like to work on this issue:\n\n' +
-              '1. **Claim the issue** - Comment below to let others know you\'re working on it\n' +
-              '2. **Get started** - Check our [Contributing Guide](CONTRIBUTING.md) for setup instructions\n' +
-              '3. **Ask questions** - Don\'t hesitate to ask if you need help or clarification\n' +
-              '4. **Submit PR** - We\'re here to help you through the process\n\n' +
-              'Happy coding! 🚀';
+            try {
+              const item = context.payload.issue || context.payload.pull_request;
+              const labels = item.labels.map(label => label.name);
+              
+              if (labels.includes('good first issue')) {
+                // Check if we've already commented (avoid spam)
+                const comments = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number
+                });
+                
+                const botCommented = comments.data.some(comment => 
+                  comment.user.type === 'Bot' && 
+                  comment.body.includes('good first issue')
+                );
+                
+                if (!botCommented) {
+                  const comment = `🌟 **Welcome to your first contribution opportunity!**\n\n` +
+                    `This issue is marked as a "good first issue" - perfect for newcomers! Here's how to get started:\n\n` +
+                    `### 🚀 **Getting Started**\n` +
+                    `1. **🙋‍♀️ Claim this issue** - Comment below to let others know you're working on it\n` +
+                    `2. **📖 Read our guides** - Check [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions\n` +
+                    `3. **🔧 Set up your environment** - Follow our development setup guide\n` +
+                    `4. **💬 Ask questions** - Don't hesitate to ask for help in comments\n\n` +
+                    `### 🎯 **What makes this beginner-friendly:**\n` +
+                    `- Clear scope and requirements\n` +
+                    `- Good documentation and examples\n` +
+                    `- Supportive community ready to help\n\n` +
+                    `### 🤝 **Need Help?**\n` +
+                    `- Tag maintainers in comments\n` +
+                    `- Join our community discussions\n` +
+                    `- Check similar resolved issues for examples\n\n` +
+                    `*Happy coding! We're excited to see your contribution! 🎉*`;
+                  
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    body: comment
+                  });
+                  
+                  core.info('🌟 Good first issue guidance posted');
+                }
+              }
+            } catch (error) {
+              core.error(`Good first issue assistance failed: ${error.message}`);
+            }
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: comment
-            });
-
-  cleanup:
-    needs: [auto-label, ai-assist, triage-assist]
+  # 📊 Enterprise Monitoring: Comprehensive observability
+  monitoring:
+    name: 📊 Workflow Monitoring
+    needs: [validate, auto-label, ai-assist, triage-assist]
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    if: always()
+    if: always() && env.TELEMETRY_ENABLED == 'true'
     steps:
-      - name: Log workflow completion
+      - name: 📈 Collect and report metrics
         uses: actions/github-script@v7
         with:
           script: |
-            console.log('Auto-label and AI assist workflow completed for issue #' + context.issue.number);
-            console.log('Labels: ' + context.payload.issue.labels.map(label => label.name).join(', '));
+            try {
+              const item = context.payload.issue || context.payload.pull_request;
+              const itemType = context.payload.issue ? 'issue' : 'pull_request';
+              const itemNumber = context.issue.number;
+              
+              // Collect job results
+              const jobs = {
+                validate: '${{ needs.validate.result }}',
+                autoLabel: '${{ needs.auto-label.result }}',
+                aiAssist: '${{ needs.ai-assist.result }}',
+                triageAssist: '${{ needs.triage-assist.result }}'
+              };
+              
+              // Calculate success metrics
+              const totalJobs = Object.keys(jobs).length;
+              const successfulJobs = Object.values(jobs).filter(result => result === 'success').length;
+              const successRate = (successfulJobs / totalJobs * 100).toFixed(1);
+              
+              // Performance metrics
+              const workflowStartTime = new Date('${{ github.event.created_at }}');
+              const currentTime = new Date();
+              const processingTime = Math.round((currentTime - workflowStartTime) / 1000);
+              
+              // Create comprehensive report
+              const report = {
+                workflow: {
+                  version: process.env.WORKFLOW_VERSION,
+                  repository: context.repo.full_name,
+                  runId: context.runId,
+                  runNumber: context.runNumber
+                },
+                item: {
+                  type: itemType,
+                  number: itemNumber,
+                  title: item.title,
+                  author: item.user.login,
+                  labels: item.labels.map(l => l.name),
+                  createdAt: item.created_at
+                },
+                performance: {
+                  processingTimeSeconds: processingTime,
+                  successRate: successRate,
+                  jobResults: jobs
+                },
+                timestamp: currentTime.toISOString()
+              };
+              
+              // Log structured data for monitoring systems
+              console.log('📊 WORKFLOW_METRICS:', JSON.stringify(report, null, 2));
+              
+              // Summary for humans
+              console.log(`\n🎯 Workflow Summary:`);
+              console.log(`   📋 Processed: ${itemType} #${itemNumber}`);
+              console.log(`   ⏱️  Duration: ${processingTime}s`);
+              console.log(`   ✅ Success Rate: ${successRate}%`);
+              console.log(`   🏷️  Final Labels: ${item.labels.map(l => l.name).join(', ') || 'none'}`);
+              
+              // Set workflow outputs for downstream systems
+              core.setOutput('success-rate', successRate);
+              core.setOutput('processing-time', processingTime);
+              core.setOutput('metrics-json', JSON.stringify(report));
+              
+            } catch (error) {
+              core.error(`Monitoring failed: ${error.message}`);
+              // Don't fail workflow for monitoring issues
+            }

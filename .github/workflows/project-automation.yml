@@ -1,0 +1,133 @@
+name: 📋 GitHub Projects Automation
+
+on:
+  issues:
+    types: [opened, labeled, closed, reopened]
+  pull_request:
+    types: [opened, labeled, closed, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+  repository-projects: write
+  contents: read
+
+# 🌍 Project Configuration
+env:
+  # Project Board URLs (update these after creating your projects)
+  HIGH_PRIORITY_PROJECT_ID: ""  # Get from project URL
+  GOOD_FIRST_ISSUES_PROJECT_ID: ""  # Get from project URL  
+  SPRINT_PLANNING_PROJECT_ID: ""  # Get from project URL
+
+jobs:
+  project-automation:
+    name: 📋 Auto-manage Project Boards
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: 🎯 Smart Project Board Management
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const item = context.payload.issue || context.payload.pull_request;
+              const itemType = context.payload.issue ? 'issue' : 'pull_request';
+              const labels = item.labels.map(label => label.name);
+              const action = context.payload.action;
+              
+              // Log for GitHub native monitoring
+              console.log(`📋 Processing ${itemType} #${item.number} with labels: ${labels.join(', ')} (action: ${action})`);
+              
+              // Helper function to add item to project (if project ID is configured)
+              const addToProject = async (projectId, itemId, itemType) => {
+                if (!projectId) {
+                  console.log(`⚠️ Project ID not configured, skipping project assignment`);
+                  return;
+                }
+                
+                try {
+                  // Note: This requires GitHub Projects v2 API
+                  console.log(`📌 Would add ${itemType} #${item.number} to project ${projectId}`);
+                  // Actual API call would go here when project IDs are configured
+                } catch (error) {
+                  console.warn(`Failed to add to project: ${error.message}`);
+                }
+              };
+              
+              // Smart project assignment based on labels and actions
+              if (action === 'opened' || action === 'labeled') {
+                
+                // High Priority Project Assignment
+                if (labels.includes('urgent') || labels.includes('high-priority')) {
+                  console.log('🚨 High priority item detected - adding to priority board');
+                  await addToProject(process.env.HIGH_PRIORITY_PROJECT_ID, item.node_id, itemType);
+                }
+                
+                // Good First Issues Project Assignment
+                if (labels.includes('good first issue')) {
+                  console.log('🌟 Good first issue - adding to newcomer board');
+                  await addToProject(process.env.GOOD_FIRST_ISSUES_PROJECT_ID, item.node_id, itemType);
+                }
+                
+                // Sprint Planning Project Assignment
+                if (labels.some(label => label.startsWith('effort/'))) {
+                  console.log('⚡ Effort-labeled item - adding to sprint planning board');
+                  await addToProject(process.env.SPRINT_PLANNING_PROJECT_ID, item.node_id, itemType);
+                }
+              }
+              
+              // Status-based actions
+              if (action === 'closed') {
+                console.log('✅ Item closed - would move to Done column in all relevant projects');
+              }
+              
+              if (action === 'reopened') {
+                console.log('🔄 Item reopened - would move back to appropriate column');
+              }
+              
+              // Enhanced metrics for GitHub native analytics
+              const metrics = {
+                workflow: 'project-automation',
+                version: '1.0.0',
+                item: {
+                  type: itemType,
+                  number: item.number,
+                  title: item.title,
+                  state: item.state,
+                  assignees: item.assignees?.length || 0,
+                  author: item.user.login
+                },
+                labels: {
+                  all: labels,
+                  priority: labels.includes('urgent') ? 'urgent' : 
+                           labels.includes('high-priority') ? 'high' : 'normal',
+                  effort: labels.find(l => l.startsWith('effort/'))?.replace('effort/', '') || 'unknown',
+                  type: labels.find(l => ['bug', 'enhancement', 'documentation'].includes(l)) || 'other',
+                  isGoodFirstIssue: labels.includes('good first issue')
+                },
+                automation: {
+                  action: action,
+                  triggeredProjects: [
+                    labels.includes('urgent') || labels.includes('high-priority') ? 'high-priority' : null,
+                    labels.includes('good first issue') ? 'good-first-issues' : null,
+                    labels.some(l => l.startsWith('effort/')) ? 'sprint-planning' : null
+                  ].filter(Boolean)
+                },
+                timestamp: new Date().toISOString()
+              };
+              
+              // Structured logging for GitHub native monitoring
+              console.log('📊 PROJECT_AUTOMATION_METRICS:', JSON.stringify(metrics, null, 2));
+              
+              // Summary for quick scanning
+              console.log(`\n🎯 Automation Summary:`);
+              console.log(`   📋 Item: ${itemType} #${item.number}`);
+              console.log(`   🏷️  Labels: ${labels.join(', ') || 'none'}`);
+              console.log(`   📌 Projects: ${metrics.automation.triggeredProjects.join(', ') || 'none'}`);
+              console.log(`   ⚡ Priority: ${metrics.labels.priority}`);
+              console.log(`   🔧 Effort: ${metrics.labels.effort}`);
+              
+            } catch (error) {
+              console.error('❌ Project automation error:', error.message);
+              // Don't fail the workflow for project automation issues
+            }

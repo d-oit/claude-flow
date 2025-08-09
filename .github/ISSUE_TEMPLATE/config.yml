@@ -1,0 +1,20 @@
+# GitHub Issue Template Configuration
+# This enhances our workflow's monitoring by providing structured data
+
+blank_issues_enabled: true
+contact_links:
+  - name: 📊 Workflow Analytics Dashboard
+    url: https://github.com/d-oit/claude-flow/issues?q=is%3Aissue+commented-by%3Agithub-actions
+    about: View AI-assisted issues and workflow performance
+  
+  - name: 🚨 High Priority Issues
+    url: https://github.com/d-oit/claude-flow/issues?q=is%3Aopen+label%3Aurgent%2Chigh-priority
+    about: Critical issues requiring immediate attention
+  
+  - name: 🌟 Good First Issues
+    url: https://github.com/d-oit/claude-flow/issues?q=is%3Aopen+label%3A%22good+first+issue%22+no%3Aassignee
+    about: Perfect for new contributors to get started
+  
+  - name: 📈 Repository Insights
+    url: https://github.com/d-oit/claude-flow/pulse
+    about: Native GitHub analytics and activity overview
