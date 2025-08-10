@@ -49,7 +49,7 @@ jobs:
     steps:
       - name: Detect event type and validate
         id: detect
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const item = context.payload.issue || context.payload.pull_request;
@@ -136,7 +136,7 @@ jobs:
 
       - name: 🧹 Remove duplicate labels with smart deduplication
         if: matrix.step == 'cleanup-labels'
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           retries: ${{ env.API_RETRY_COUNT }}
           retry-exempt-status-codes: 400,401,403,404,422
@@ -173,14 +173,14 @@ jobs:
     if: |
       always() && 
       needs.validate.outputs.skip-processing != 'true' &&
-      env.ENABLE_AI_SUGGESTIONS == 'true'
+      ${{ env.ENABLE_AI_SUGGESTIONS == 'true' }}
     strategy:
       fail-fast: false  # Continue other suggestions even if one fails
       matrix:
         suggestion-type: [bug-report, enhancement, documentation]
     steps:
       - name: 🤖 Process AI suggestions with smart detection
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           SUGGESTION_TYPE: ${{ matrix.suggestion-type }}
         with:
@@ -189,6 +189,61 @@ jobs:
             const suggestionType = process.env.SUGGESTION_TYPE;
             
             try {
+              // Enhanced rate limiting protection with performance tracking
+              const rateLimitSafeCall = async (apiCall, retries = 3, operationName = 'api-call') => {
+                const startTime = Date.now();
+                let totalWaitTime = 0;
+                
+                for (let attempt = 0; attempt < retries; attempt++) {
+                  try {
+                    const result = await apiCall();
+                    const duration = Date.now() - startTime;
+                    
+                    // Log successful API call metrics
+                    if (attempt > 0 || totalWaitTime > 0) {
+                      core.info(`📊 API_METRICS: ${JSON.stringify({
+                        operation: operationName,
+                        success: true,
+                        attempts: attempt + 1,
+                        total_duration_ms: duration,
+                        wait_time_ms: totalWaitTime,
+                        timestamp: new Date().toISOString()
+                      })}`);
+                    }
+                    
+                    return result;
+                  } catch (error) {
+                    if (error.status === 403 && error.message.includes('rate limit')) {
+                      const resetTime = error.response?.headers?.['x-ratelimit-reset'];
+                      const waitTime = resetTime ? Math.min((resetTime * 1000) - Date.now(), 60000) : 30000;
+                      totalWaitTime += waitTime;
+                      core.info(`⏳ Rate limited, waiting ${Math.round(waitTime/1000)}s (attempt ${attempt + 1}/${retries})`);
+                      await new Promise(resolve => setTimeout(resolve, waitTime));
+                    } else if (error.status === 502 || error.status === 503) {
+                      // Server errors - exponential backoff
+                      const backoffTime = Math.min(1000 * Math.pow(2, attempt), 30000);
+                      totalWaitTime += backoffTime;
+                      core.info(`🔄 Server error, retrying in ${backoffTime/1000}s (attempt ${attempt + 1}/${retries})`);
+                      await new Promise(resolve => setTimeout(resolve, backoffTime));
+                    } else {
+                      // Log failed API call metrics
+                      core.info(`📊 API_METRICS: ${JSON.stringify({
+                        operation: operationName,
+                        success: false,
+                        attempts: attempt + 1,
+                        error_status: error.status,
+                        error_message: error.message,
+                        total_duration_ms: Date.now() - startTime,
+                        wait_time_ms: totalWaitTime,
+                        timestamp: new Date().toISOString()
+                      })}`);
+                      throw error;
+                    }
+                  }
+                }
+                throw new Error(`Max retries (${retries}) exceeded for API call: ${operationName}`);
+              };
+
               // Reusable helper functions
               const getItemData = () => {
                 const item = context.payload.issue || context.payload.pull_request;
@@ -217,12 +272,14 @@ jobs:
                   commentBody = commentBody.substring(0, parseInt(process.env.MAX_COMMENT_LENGTH)) + '...';
                 }
                 
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: commentBody
-                });
+                return await rateLimitSafeCall(() => 
+                  github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    body: commentBody
+                  }), 3, 'ai-assist-create-comment'
+                );
               };
               
               // Get item data
@@ -255,8 +312,30 @@ jobs:
                         `- Any workarounds you've tried\n\n` +
                         `*This helps us prioritize and fix issues faster! 🚀*`;
                       
+                      const startTime = Date.now();
                       await createComment(comment);
+                      const duration = Date.now() - startTime;
+                      
+                      // Structured success logging
+                      const successContext = {
+                        job: 'ai-assist',
+                        action: 'bug-report-suggestion',
+                        itemNumber: context.issue.number,
+                        itemType: context.payload.issue ? 'issue' : 'pull_request',
+                        timestamp: new Date().toISOString(),
+                        performance: {
+                          duration_ms: duration,
+                          comment_length: comment.length
+                        },
+                        context: {
+                          repository: context.repo.full_name,
+                          runId: context.runId,
+                          actor: context.actor
+                        }
+                      };
+                      
                       core.info('🤖 Bug report suggestion posted');
+                      core.info(`📊 SUCCESS_METRICS: ${JSON.stringify(successContext, null, 2)}`);
                     }
                   }
                   break;
@@ -282,8 +361,30 @@ jobs:
                         `- **Priority Level**: How important is this to you? (Low/Medium/High)\n\n` +
                         `*Well-defined requests help us build better features! 🎯*`;
                       
+                      const startTime = Date.now();
                       await createComment(comment);
+                      const duration = Date.now() - startTime;
+                      
+                      // Structured success logging
+                      const successContext = {
+                        job: 'ai-assist',
+                        action: 'enhancement-suggestion',
+                        itemNumber: context.issue.number,
+                        itemType: context.payload.issue ? 'issue' : 'pull_request',
+                        timestamp: new Date().toISOString(),
+                        performance: {
+                          duration_ms: duration,
+                          comment_length: comment.length
+                        },
+                        context: {
+                          repository: context.repo.full_name,
+                          runId: context.runId,
+                          actor: context.actor
+                        }
+                      };
+                      
                       core.info('🤖 Enhancement suggestion posted');
+                      core.info(`📊 SUCCESS_METRICS: ${JSON.stringify(successContext, null, 2)}`);
                     }
                   }
                   break;
@@ -311,22 +412,65 @@ jobs:
                         `- Related documentation that might need updates\n\n` +
                         `*Precise details help us maintain accurate docs! 📖*`;
                       
+                      const startTime = Date.now();
                       await createComment(comment);
+                      const duration = Date.now() - startTime;
+                      
+                      // Structured success logging
+                      const successContext = {
+                        job: 'ai-assist',
+                        action: 'documentation-suggestion',
+                        itemNumber: context.issue.number,
+                        itemType: context.payload.issue ? 'issue' : 'pull_request',
+                        timestamp: new Date().toISOString(),
+                        performance: {
+                          duration_ms: duration,
+                          comment_length: comment.length
+                        },
+                        context: {
+                          repository: context.repo.full_name,
+                          runId: context.runId,
+                          actor: context.actor
+                        }
+                      };
+                      
                       core.info('🤖 Documentation suggestion posted');
+                      core.info(`📊 SUCCESS_METRICS: ${JSON.stringify(successContext, null, 2)}`);
                     }
                   }
                   break;
               }
               
             } catch (error) {
+              // Structured error logging for observability
+              const errorContext = {
+                job: 'ai-assist',
+                suggestionType,
+                itemNumber: context.issue.number,
+                itemType: context.payload.issue ? 'issue' : 'pull_request',
+                timestamp: new Date().toISOString(),
+                error: {
+                  message: error.message,
+                  status: error.status,
+                  stack: error.stack?.split('\n').slice(0, 3).join('\n') // Truncated stack
+                },
+                context: {
+                  repository: context.repo.full_name,
+                  runId: context.runId,
+                  actor: context.actor
+                }
+              };
+              
               core.error(`AI suggestion failed for ${suggestionType}: ${error.message}`);
+              core.info(`🔍 ERROR_CONTEXT: ${JSON.stringify(errorContext, null, 2)}`);
+              
               // Don't fail the workflow, just log and continue
             }
 
   # 🎯 Enterprise Triage: Smart prioritization and assignment
   triage-assist:
     name: 🎯 Smart Triage
-    needs: [validate, auto-label]
+    needs: [validate]
     runs-on: ubuntu-latest
     timeout-minutes: 4
     if: |
@@ -334,10 +478,38 @@ jobs:
       needs.validate.outputs.skip-processing != 'true'
     steps:
       - name: 🏷️ Smart priority labeling
-        if: env.ENABLE_PRIORITY_LABELING == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
+            // Check if priority labeling is enabled
+            if (process.env.ENABLE_PRIORITY_LABELING !== 'true') {
+              console.log('🏷️ Priority labeling disabled, skipping...');
+              return;
+            }
+            
+            // Rate limiting protection helper
+            const rateLimitSafeCall = async (apiCall, retries = 3) => {
+              for (let attempt = 0; attempt < retries; attempt++) {
+                try {
+                  return await apiCall();
+                } catch (error) {
+                  if (error.status === 403 && error.message.includes('rate limit')) {
+                    const resetTime = error.response?.headers?.['x-ratelimit-reset'];
+                    const waitTime = resetTime ? Math.min((resetTime * 1000) - Date.now(), 60000) : 30000;
+                    core.info(`⏳ Rate limited, waiting ${Math.round(waitTime/1000)}s (attempt ${attempt + 1}/${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                  } else if (error.status === 502 || error.status === 503) {
+                    const backoffTime = Math.min(1000 * Math.pow(2, attempt), 30000);
+                    core.info(`🔄 Server error, retrying in ${backoffTime/1000}s (attempt ${attempt + 1}/${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, backoffTime));
+                  } else {
+                    throw error;
+                  }
+                }
+              }
+              throw new Error(`Max retries (${retries}) exceeded for API call`);
+            };
+            
             try {
               const item = context.payload.issue || context.payload.pull_request;
               const { title, body = '', labels } = item;
@@ -400,36 +572,107 @@ jobs:
               }
               
               if (labelsToAdd.length > 0) {
-                await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  labels: labelsToAdd
-                });
+                await rateLimitSafeCall(() =>
+                  github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    labels: labelsToAdd
+                  })
+                );
+                
+                // Structured success logging for label operations
+                const successContext = {
+                  job: 'triage-assist',
+                  action: 'priority-labeling',
+                  itemNumber: context.issue.number,
+                  itemType: context.payload.issue ? 'issue' : 'pull_request',
+                  timestamp: new Date().toISOString(),
+                  data: {
+                    labels_added: labelsToAdd,
+                    labels_count: labelsToAdd.length
+                  },
+                  context: {
+                    repository: context.repo.full_name,
+                    runId: context.runId,
+                    actor: context.actor
+                  }
+                };
                 
                 core.info(`🏷️ Added priority labels: ${labelsToAdd.join(', ')}`);
+                core.info(`📊 SUCCESS_METRICS: ${JSON.stringify(successContext, null, 2)}`);
               }
               
             } catch (error) {
+              // Structured error logging for observability
+              const errorContext = {
+                job: 'triage-assist',
+                step: 'priority-labeling',
+                itemNumber: context.issue.number,
+                itemType: context.payload.issue ? 'issue' : 'pull_request',
+                timestamp: new Date().toISOString(),
+                error: {
+                  message: error.message,
+                  status: error.status,
+                  stack: error.stack?.split('\n').slice(0, 3).join('\n')
+                },
+                context: {
+                  repository: context.repo.full_name,
+                  runId: context.runId,
+                  actor: context.actor
+                }
+              };
+              
               core.error(`Priority labeling failed: ${error.message}`);
+              core.info(`🔍 ERROR_CONTEXT: ${JSON.stringify(errorContext, null, 2)}`);
             }
 
       - name: 🌟 Good first issue assistance
-        if: env.ENABLE_GOOD_FIRST_ISSUE_COMMENTS == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
+            // Check if good first issue comments are enabled
+            if (process.env.ENABLE_GOOD_FIRST_ISSUE_COMMENTS !== 'true') {
+              console.log('🌟 Good first issue comments disabled, skipping...');
+              return;
+            }
+            
+            // Rate limiting protection helper
+            const rateLimitSafeCall = async (apiCall, retries = 3) => {
+              for (let attempt = 0; attempt < retries; attempt++) {
+                try {
+                  return await apiCall();
+                } catch (error) {
+                  if (error.status === 403 && error.message.includes('rate limit')) {
+                    const resetTime = error.response?.headers?.['x-ratelimit-reset'];
+                    const waitTime = resetTime ? Math.min((resetTime * 1000) - Date.now(), 60000) : 30000;
+                    core.info(`⏳ Rate limited, waiting ${Math.round(waitTime/1000)}s (attempt ${attempt + 1}/${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                  } else if (error.status === 502 || error.status === 503) {
+                    const backoffTime = Math.min(1000 * Math.pow(2, attempt), 30000);
+                    core.info(`🔄 Server error, retrying in ${backoffTime/1000}s (attempt ${attempt + 1}/${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, backoffTime));
+                  } else {
+                    throw error;
+                  }
+                }
+              }
+              throw new Error(`Max retries (${retries}) exceeded for API call`);
+            };
+            
             try {
               const item = context.payload.issue || context.payload.pull_request;
               const labels = item.labels.map(label => label.name);
               
               if (labels.includes('good first issue')) {
                 // Check if we've already commented (avoid spam)
-                const comments = await github.rest.issues.listComments({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number
-                });
+                const comments = await rateLimitSafeCall(() =>
+                  github.rest.issues.listComments({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number
+                  })
+                );
                 
                 const botCommented = comments.data.some(comment => 
                   comment.user.type === 'Bot' && 
@@ -454,18 +697,59 @@ jobs:
                     `- Check similar resolved issues for examples\n\n` +
                     `*Happy coding! We're excited to see your contribution! 🎉*`;
                   
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.issue.number,
-                    body: comment
-                  });
+                  await rateLimitSafeCall(() =>
+                    github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: context.issue.number,
+                      body: comment
+                    })
+                  );
+                  
+                  // Structured success logging
+                  const successContext = {
+                    job: 'triage-assist',
+                    action: 'good-first-issue-guidance',
+                    itemNumber: context.issue.number,
+                    itemType: context.payload.issue ? 'issue' : 'pull_request',
+                    timestamp: new Date().toISOString(),
+                    data: {
+                      comment_length: comment.length,
+                      guidance_provided: true
+                    },
+                    context: {
+                      repository: context.repo.full_name,
+                      runId: context.runId,
+                      actor: context.actor
+                    }
+                  };
                   
                   core.info('🌟 Good first issue guidance posted');
+                  core.info(`📊 SUCCESS_METRICS: ${JSON.stringify(successContext, null, 2)}`);
                 }
               }
             } catch (error) {
+              // Structured error logging for observability
+              const errorContext = {
+                job: 'triage-assist',
+                step: 'good-first-issue-assistance',
+                itemNumber: context.issue.number,
+                itemType: context.payload.issue ? 'issue' : 'pull_request',
+                timestamp: new Date().toISOString(),
+                error: {
+                  message: error.message,
+                  status: error.status,
+                  stack: error.stack?.split('\n').slice(0, 3).join('\n')
+                },
+                context: {
+                  repository: context.repo.full_name,
+                  runId: context.runId,
+                  actor: context.actor
+                }
+              };
+              
               core.error(`Good first issue assistance failed: ${error.message}`);
+              core.info(`🔍 ERROR_CONTEXT: ${JSON.stringify(errorContext, null, 2)}`);
             }
 
   # 📊 Enterprise Monitoring: Comprehensive observability
@@ -474,10 +758,10 @@ jobs:
     needs: [validate, auto-label, ai-assist, triage-assist]
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    if: always() && env.TELEMETRY_ENABLED == 'true'
+    if: always() && ${{ env.TELEMETRY_ENABLED == 'true' }}
     steps:
       - name: 📈 Collect and report metrics
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             try {
@@ -543,6 +827,27 @@ jobs:
               core.setOutput('metrics-json', JSON.stringify(report));
               
             } catch (error) {
+              // Structured error logging for observability
+              const errorContext = {
+                job: 'monitoring',
+                step: 'metrics-collection',
+                itemNumber: context.issue?.number || 'unknown',
+                itemType: context.payload.issue ? 'issue' : 'pull_request',
+                timestamp: new Date().toISOString(),
+                error: {
+                  message: error.message,
+                  status: error.status,
+                  stack: error.stack?.split('\n').slice(0, 3).join('\n')
+                },
+                context: {
+                  repository: context.repo.full_name,
+                  runId: context.runId,
+                  actor: context.actor
+                }
+              };
+              
               core.error(`Monitoring failed: ${error.message}`);
+              core.info(`🔍 ERROR_CONTEXT: ${JSON.stringify(errorContext, null, 2)}`);
+              
               // Don't fail workflow for monitoring issues
             }
