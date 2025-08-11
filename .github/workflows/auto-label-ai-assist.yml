@@ -1,6 +1,18 @@
 name: 🏢 Enterprise Auto Label & AI Assist
 
 on:
+  workflow_dispatch:
+    inputs:
+      process_all_issues:
+        description: 'Process all existing open issues'
+        required: false
+        default: 'false'
+        type: boolean
+      max_issues:
+        description: 'Maximum number of issues to process (default: 50)'
+        required: false
+        default: '50'
+        type: string
   issues:
     types: [opened, edited, reopened]
   pull_request:
@@ -75,6 +87,123 @@ jobs:
             // Telemetry
             if (process.env.TELEMETRY_ENABLED === 'true') {
               console.log(`📊 Workflow started: ${itemType} #${itemNumber} v${process.env.WORKFLOW_VERSION}`);
+            }
+
+  # 🔄 Process All Existing Issues: Manual trigger for bulk processing
+  process-all-issues:
+    name: 🔄 Process All Existing Issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.process_all_issues == 'true'
+    outputs:
+      processed-count: ${{ steps.process.outputs.processed-count }}
+    steps:
+      - name: 🔄 Process all open issues
+        id: process
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const maxIssues = parseInt(context.payload.inputs.max_issues) || 50;
+            console.log(`🚀 Starting bulk processing of up to ${maxIssues} issues...`);
+            
+            // Get all open issues
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: Math.min(maxIssues, 100),
+              sort: 'created',
+              direction: 'asc'
+            });
+            
+            console.log(`📋 Found ${issues.length} open issues to process`);
+            
+            let processedCount = 0;
+            const results = [];
+            
+            for (const issue of issues) {
+              try {
+                console.log(`\n🔍 Processing Issue #${issue.number}: ${issue.title}`);
+                
+                // Analyze issue content
+                const { title, body = '', labels } = issue;
+                const text = (title + ' ' + body).toLowerCase();
+                const currentLabels = labels.map(l => l.name);
+                const labelsToAdd = [];
+                
+                // Bug detection
+                if (text.match(/\b(bug|error|issue|problem|fail|crash|broken)\b/) && !currentLabels.includes('bug')) {
+                  labelsToAdd.push('bug');
+                }
+                
+                // Enhancement detection
+                if (text.match(/\b(feature|enhancement|improve|add|request|suggest)\b/) && !currentLabels.includes('enhancement')) {
+                  labelsToAdd.push('enhancement');
+                }
+                
+                // Documentation detection
+                if (text.match(/\b(documentation|docs|readme|guide|manual)\b/) && !currentLabels.includes('documentation')) {
+                  labelsToAdd.push('documentation');
+                }
+                
+                // Priority detection
+                if (text.match(/\b(urgent|critical|emergency|blocking|production|security)\b/) && !currentLabels.includes('priority: high')) {
+                  labelsToAdd.push('priority: high');
+                } else if (text.match(/\b(important|major|significant)\b/) && !currentLabels.includes('priority: medium')) {
+                  labelsToAdd.push('priority: medium');
+                } else if (text.match(/\b(typo|grammar|simple|easy|minor)\b/) && !currentLabels.includes('good first issue')) {
+                  labelsToAdd.push('good first issue');
+                }
+                
+                // Apply labels if any found
+                if (labelsToAdd.length > 0) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    labels: labelsToAdd
+                  });
+                  
+                  console.log(`✅ Added labels to #${issue.number}: ${labelsToAdd.join(', ')}`);
+                  results.push({
+                    number: issue.number,
+                    title: issue.title,
+                    addedLabels: labelsToAdd
+                  });
+                } else {
+                  console.log(`ℹ️  No new labels needed for #${issue.number}`);
+                }
+                
+                processedCount++;
+                
+                // Rate limiting: small delay between issues
+                if (processedCount % 10 === 0) {
+                  console.log(`⏳ Processed ${processedCount} issues, brief pause...`);
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+                
+              } catch (error) {
+                console.error(`❌ Error processing issue #${issue.number}: ${error.message}`);
+                continue;
+              }
+            }
+            
+            console.log(`\n🎯 Bulk processing complete!`);
+            console.log(`📊 Processed: ${processedCount} issues`);
+            console.log(`🏷️  Applied labels to: ${results.length} issues`);
+            
+            // Set output
+            core.setOutput('processed-count', processedCount);
+            
+            // Summary comment
+            if (results.length > 0) {
+              const summary = `## 🤖 Bulk Auto-Labeling Complete\n\n` +
+                `Processed **${processedCount}** issues and applied labels to **${results.length}** issues:\n\n` +
+                results.slice(0, 10).map(r => `- #${r.number}: Added \`${r.addedLabels.join('`, `')}\``).join('\n') +
+                (results.length > 10 ? `\n\n...and ${results.length - 10} more issues` : '');
+              
+              // Create a summary issue or comment (optional)
+              console.log('📋 Summary:', summary);
             }
 
   # 🏷️ Enterprise Labeling: Optimized with caching and error recovery
