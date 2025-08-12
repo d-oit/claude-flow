@@ -250,17 +250,479 @@ jobs:
           fail-on-error: false  # Don't fail entire workflow
         continue-on-error: true
 
-      - name: 🎯 Apply regex-based labels with rate limiting
+      - name: 🎯 Apply content-based labels with rate limiting
         if: matrix.step == 'apply-labels'
-        uses: github/issue-labeler@v3
+        uses: actions/github-script@v7
         with:
-          configuration-path: .github/labeler.yml
-          include-title: 1
-          include-body: 1
-          sync-labels: 0
-          repo-token: ${{ github.token }}
-          exclude-labels: 'duplicate,wontfix,invalid,closed'
-          dry-run: false
+          retries: ${{ env.API_RETRY_COUNT }}
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            try {
+              const item = context.payload.issue || context.payload.pull_request;
+              if (!item) return;
+              
+              const title = (item.title || '').toLowerCase();
+              const body = (item.body || '').toLowerCase();
+              const currentLabels = item.labels.map(label => label.name);
+              
+              // Define sophisticated label patterns with priority and context
+              const labelPatterns = {
+                // Bug severity patterns
+                'critical': {
+                  patterns: [/(critical|urgent|blocking|blocker|crash|data loss|security breach|production down)/],
+                  weight: 10,
+                  excludeWith: ['enhancement', 'question']
+                },
+                'bug': {
+                  patterns: [
+                    /(bug|error|exception|crash|fail|broken|issue|problem|doesn'?t work|not working)/,
+                    /(unexpected behavior|incorrect|wrong|invalid|missing)/,
+                    /(throws?|stack trace|null pointer|undefined|500 error)/
+                  ],
+                  weight: 8,
+                  requiresContext: ['steps to reproduce', 'expected', 'actual']
+                },
+                
+                // Enhancement and feature patterns
+                'enhancement': {
+                  patterns: [
+                    /(feature|enhancement|improvement|suggestion|request|add|would like|should)/,
+                    /(new functionality|extend|expand|support for)/,
+                    /(it would be nice|please add|can we have)/
+                  ],
+                  weight: 6,
+                  excludeWith: ['bug', 'question']
+                },
+                'breaking-change': {
+                  patterns: [/(breaking|breaking change|incompatible|deprecated|remove|delete|drop|major version)/],
+                  weight: 9,
+                  requiresContext: ['migration', 'upgrade', 'version']
+                },
+                
+                // Priority indicators
+                'high-priority': {
+                  patterns: [
+                    /(urgent|asap|high priority|important|critical|blocking)/,
+                    /(production|live|customer impact|revenue impact)/,
+                    /(deadline|time sensitive|needed soon)/
+                  ],
+                  weight: 9,
+                  contextBoost: ['critical', 'bug', 'security']
+                },
+                'low-priority': {
+                  patterns: [
+                    /(low priority|nice to have|when time permits|future|someday)/,
+                    /(minor|cosmetic|polish|cleanup)/
+                  ],
+                  weight: 3,
+                  excludeWith: ['critical', 'high-priority', 'security']
+                },
+                
+                // Complexity indicators
+                'good-first-issue': {
+                  patterns: [
+                    /(good first issue|good for beginners|easy|simple|beginner.?friendly)/,
+                    /(starter|newcomer|first contribution|small change)/,
+                    /(typo|documentation fix|minor update)/
+                  ],
+                  weight: 5,
+                  excludeWith: ['critical', 'breaking-change', 'complex']
+                },
+                'complex': {
+                  patterns: [
+                    /(complex|complicated|difficult|challenging|major refactor)/,
+                    /(architecture|design pattern|algorithm|performance optimization)/,
+                    /(multiple components|cross.?cutting|system.?wide)/
+                  ],
+                  weight: 7,
+                  excludeWith: ['good-first-issue', 'simple']
+                },
+                
+                // Domain-specific patterns
+                'documentation': {
+                  patterns: [
+                    /(docs?|documentation|readme|guide|tutorial|manual|wiki)/,
+                    /(examples?|sample|demo|walkthrough)/,
+                    /(api reference|specification|changelog)/
+                  ],
+                  weight: 4,
+                  contextBoost: ['missing', 'outdated', 'unclear']
+                },
+                'security': {
+                  patterns: [
+                    /(security|vulnerability|exploit|attack|breach|sensitive)/,
+                    /(auth|authentication|authorization|permission|access control)/,
+                    /(password|token|secret|credential|encryption)/,
+                    /(xss|csrf|injection|sanitiz)/
+                  ],
+                  weight: 10,
+                  requiresContext: ['impact', 'severity', 'affected versions']
+                },
+                'performance': {
+                  patterns: [
+                    /(slow|performance|speed|latency|throughput|optimization|optimize|efficient)/,
+                    /(memory leak|cpu usage|load time|response time)/,
+                    /(scalability|bottleneck|profiling)/
+                  ],
+                  weight: 7,
+                  contextBoost: ['benchmark', 'metrics', 'measurement']
+                },
+                
+                // Technical area patterns
+                'api': {
+                  patterns: [
+                    /(api|endpoint|route|rest|graphql|request|response)/,
+                    /(client|server|http|json|xml)/,
+                    /(webhook|callback|integration)/
+                  ],
+                  weight: 5,
+                  contextBoost: ['breaking', 'versioning', 'compatibility']
+                },
+                'ui-ux': {
+                  patterns: [
+                    /(ui|ux|interface|design|layout|appearance|visual)/,
+                    /(frontend|display|render|style|css|responsive)/,
+                    /(accessibility|a11y|screen reader|keyboard navigation)/,
+                    /(user experience|usability|intuitive)/
+                  ],
+                  weight: 5,
+                  contextBoost: ['accessibility', 'mobile', 'browser']
+                },
+                'database': {
+                  patterns: [
+                    /(database|db|sql|query|migration|schema)/,
+                    /(postgres|mysql|mongodb|redis|sqlite)/,
+                    /(index|performance|optimization|connection)/
+                  ],
+                  weight: 6,
+                  contextBoost: ['migration', 'performance', 'data loss']
+                },
+                
+                // Development workflow
+                'build': {
+                  patterns: [
+                    /(build|ci|cd|pipeline|deploy|compilation|compile)/,
+                    /(docker|container|kubernetes|helm)/,
+                    /(webpack|rollup|vite|babel|typescript)/
+                  ],
+                  weight: 5,
+                  contextBoost: ['failing', 'broken', 'optimization']
+                },
+                'test': {
+                  patterns: [
+                    /(test|testing|unit|integration|e2e|mock|stub|coverage)/,
+                    /(jest|mocha|cypress|playwright|selenium)/,
+                    /(assertion|expect|should|spec)/
+                  ],
+                  weight: 4,
+                  contextBoost: ['failing', 'flaky', 'coverage']
+                },
+                'dependencies': {
+                  patterns: [
+                    /(dependency|dependencies|package|npm|pip|cargo|gem)/,
+                    /(version|upgrade|update|outdated|vulnerable)/,
+                    /(lock file|package.json|requirements|gemfile)/
+                  ],
+                  weight: 4,
+                  contextBoost: ['security', 'breaking', 'vulnerability']
+                },
+                
+                // Support and community
+                'question': {
+                  patterns: [
+                    /(how|what|why|when|where|can|could|would|should)/,
+                    /(help|support|assistance|guidance)/,
+                    /(\?|question|ask|wondering)/
+                  ],
+                  weight: 3,
+                  excludeWith: ['bug', 'enhancement'],
+                  requiresContext: ['specific', 'context', 'details']
+                },
+                'help-wanted': {
+                  patterns: [
+                    /(help wanted|help needed|looking for help|collaboration)/,
+                    /(contribute|volunteer|community|maintainer)/,
+                    /(review needed|feedback|input)/
+                  ],
+                  weight: 5,
+                  contextBoost: ['good-first-issue', 'documentation']
+                },
+                'duplicate': {
+                  patterns: [
+                    /(duplicate|already reported|same as|similar to)/,
+                    /(see #\d+|related to #\d+|duplicate of)/
+                  ],
+                  weight: 8,
+                  requiresContext: ['reference', 'link', 'issue number']
+                }
+              };
+              
+              // Advanced pattern matching with scoring and context awareness
+              const labelCandidates = [];
+              const fullText = `${title} ${body}`;
+              
+              // Sentiment and urgency analysis
+              const urgencyIndicators = /(urgent|asap|critical|emergency|immediately|breaking|production|down|outage)/g;
+              const frustrationIndicators = /(frustrated|annoying|terrible|awful|broken|useless|doesn'?t work)/g;
+              const positiveIndicators = /(great|awesome|love|excellent|perfect|amazing|thank you)/g;
+              
+              const urgencyScore = (fullText.match(urgencyIndicators) || []).length;
+              const frustrationScore = (fullText.match(frustrationIndicators) || []).length;
+              const positivityScore = (fullText.match(positiveIndicators) || []).length;
+              
+              // Issue template compliance check
+              const hasStepsToReproduce = /steps to reproduce|reproduction steps|how to reproduce/i.test(fullText);
+              const hasExpectedBehavior = /expected behavior|expected result|should/i.test(fullText);
+              const hasActualBehavior = /actual behavior|actual result|instead|but/i.test(fullText);
+              const hasEnvironmentInfo = /environment|version|os|browser|node|npm/i.test(fullText);
+              const hasCodeSample = /```|`[^`]+`|code|example/i.test(fullText);
+              
+              const templateCompliance = {
+                hasStepsToReproduce,
+                hasExpectedBehavior,
+                hasActualBehavior,
+                hasEnvironmentInfo,
+                hasCodeSample,
+                score: [hasStepsToReproduce, hasExpectedBehavior, hasActualBehavior, hasEnvironmentInfo, hasCodeSample].filter(Boolean).length
+              };
+              
+              // Content quality indicators
+              const wordCount = fullText.split(/\s+/).length;
+              const hasLinks = /https?:\/\/|www\./i.test(fullText);
+              const hasIssueReferences = /#\d+|issue|pr|pull request/i.test(fullText);
+              const codeBlockCount = (fullText.match(/```/g) || []).length / 2;
+              
+              // First pass: Find all matching patterns with scores
+              for (const [label, config] of Object.entries(labelPatterns)) {
+                if (currentLabels.includes(label)) continue;
+                
+                let score = 0;
+                let matchCount = 0;
+                
+                // Check all patterns for this label
+                for (const pattern of config.patterns) {
+                  const matches = fullText.match(pattern);
+                  if (matches) {
+                    matchCount += matches.length;
+                    score += config.weight * matches.length;
+                  }
+                }
+                
+                if (matchCount > 0) {
+                  // Apply context boost if relevant terms are found
+                  if (config.contextBoost) {
+                    for (const boostTerm of config.contextBoost) {
+                      if (fullText.includes(boostTerm)) {
+                        score += config.weight * 0.5; // 50% boost
+                      }
+                    }
+                  }
+                  
+                  // Dynamic scoring adjustments based on analysis
+                  
+                  // Urgency boost for critical/high-priority labels
+                  if ((label === 'critical' || label === 'high-priority') && urgencyScore > 0) {
+                    score += urgencyScore * 2;
+                  }
+                  
+                  // Frustration indicates likely bug
+                  if (label === 'bug' && frustrationScore > 0) {
+                    score += frustrationScore * 1.5;
+                  }
+                  
+                  // Template compliance boost for bug reports
+                  if (label === 'bug' && templateCompliance.score >= 3) {
+                    score += templateCompliance.score * 0.5;
+                  }
+                  
+                  // Quality content boost
+                  if (wordCount > 100 && hasCodeSample && label !== 'question') {
+                    score += 1;
+                  }
+                  
+                  // Penalize very short issues for complex labels
+                  if (wordCount < 50 && (label === 'complex' || label === 'enhancement')) {
+                    score *= 0.5;
+                  }
+                  
+                  // Boost good-first-issue for simple, well-documented issues
+                  if (label === 'good-first-issue' && templateCompliance.score >= 2 && wordCount < 200) {
+                    score += 2;
+                  }
+                  
+                  // Check if required context is present
+                  let hasRequiredContext = true;
+                  if (config.requiresContext) {
+                    hasRequiredContext = config.requiresContext.some(contextTerm => 
+                      fullText.includes(contextTerm)
+                    );
+                  }
+                  
+                  if (hasRequiredContext) {
+                    labelCandidates.push({
+                      label,
+                      score,
+                      matchCount,
+                      config
+                    });
+                  }
+                }
+              }
+              
+              // Add dynamic labels based on analysis
+              
+              // Template compliance labels
+              if (templateCompliance.score >= 4) {
+                labelCandidates.push({
+                  label: 'well-documented',
+                  score: 5,
+                  matchCount: 1,
+                  config: { weight: 5, patterns: [] }
+                });
+              } else if (templateCompliance.score <= 1 && wordCount > 50) {
+                labelCandidates.push({
+                  label: 'needs-more-info',
+                  score: 6,
+                  matchCount: 1,
+                  config: { weight: 6, patterns: [] }
+                });
+              }
+              
+              // Urgency-based labels
+              if (urgencyScore >= 2) {
+                labelCandidates.push({
+                  label: 'urgent',
+                  score: 10,
+                  matchCount: urgencyScore,
+                  config: { weight: 10, patterns: [] }
+                });
+              }
+              
+              // Content quality labels
+              if (wordCount < 30 && !hasCodeSample) {
+                labelCandidates.push({
+                  label: 'incomplete',
+                  score: 7,
+                  matchCount: 1,
+                  config: { weight: 7, patterns: [] }
+                });
+              }
+              
+              if (codeBlockCount >= 2 && wordCount > 100) {
+                labelCandidates.push({
+                  label: 'detailed',
+                  score: 4,
+                  matchCount: 1,
+                  config: { weight: 4, patterns: [] }
+                });
+              }
+              
+              // Sort candidates by score (highest first)
+              labelCandidates.sort((a, b) => b.score - a.score);
+              
+              // Second pass: Apply exclusion rules and select final labels
+              const labelsToAdd = [];
+              const selectedLabels = new Set();
+              
+              for (const candidate of labelCandidates) {
+                const { label, config } = candidate;
+                
+                // Check exclusion rules
+                let shouldExclude = false;
+                if (config.excludeWith) {
+                  for (const excludeLabel of config.excludeWith) {
+                    if (selectedLabels.has(excludeLabel) || currentLabels.includes(excludeLabel)) {
+                      shouldExclude = true;
+                      break;
+                    }
+                  }
+                }
+                
+                if (!shouldExclude && !selectedLabels.has(label)) {
+                  labelsToAdd.push(label);
+                  selectedLabels.add(label);
+                  
+                  // Limit to prevent label spam (max 5 new labels per issue)
+                  if (labelsToAdd.length >= 5) break;
+                }
+              }
+              
+              // Enhanced logging and label application
+              if (labelsToAdd.length > 0) {
+                // Log detailed analysis results
+                const analysisReport = {
+                  totalCandidates: labelCandidates.length,
+                  selectedLabels: labelsToAdd,
+                  topCandidates: labelCandidates.slice(0, 5).map(c => ({
+                    label: c.label,
+                    score: Math.round(c.score * 100) / 100,
+                    matches: c.matchCount
+                  })),
+                  existingLabels: currentLabels,
+                  contentAnalysis: {
+                    wordCount,
+                    textLength: fullText.length,
+                    hasCodeSample,
+                    hasLinks,
+                    hasIssueReferences,
+                    codeBlockCount
+                  },
+                  sentimentAnalysis: {
+                    urgencyScore,
+                    frustrationScore,
+                    positivityScore
+                  },
+                  templateCompliance: {
+                    score: templateCompliance.score,
+                    details: templateCompliance
+                  },
+                  qualityIndicators: {
+                    isWellDocumented: templateCompliance.score >= 4,
+                    needsMoreInfo: templateCompliance.score <= 1 && wordCount > 50,
+                    isDetailed: codeBlockCount >= 2 && wordCount > 100,
+                    isIncomplete: wordCount < 30 && !hasCodeSample
+                  }
+                };
+                
+                core.info(`🏷️ Sophisticated Label Analysis Complete:`);
+                core.info(`   📊 Candidates evaluated: ${labelCandidates.length}`);
+                core.info(`   ✅ Labels selected: ${labelsToAdd.join(', ')}`);
+                core.info(`   🎯 Top candidates: ${labelCandidates.slice(0, 5).map(c => `${c.label}(${Math.round(c.score)})`).join(', ')}`);
+                core.info(`   📝 Content: ${wordCount} words, template compliance: ${templateCompliance.score}/5`);
+                core.info(`   🎭 Sentiment: urgency=${urgencyScore}, frustration=${frustrationScore}, positive=${positivityScore}`);
+                
+                // Apply labels with retry logic
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: labelsToAdd
+                });
+                
+                // Log success metrics for monitoring
+                core.info(`📈 SOPHISTICATED_LABELING_METRICS: ${JSON.stringify(analysisReport)}`);
+                
+              } else {
+                core.info('🔍 No new labels selected after sophisticated analysis');
+                if (labelCandidates.length > 0) {
+                  core.info(`   📋 Candidates evaluated but excluded: ${labelCandidates.slice(0, 5).map(c => `${c.label}(${Math.round(c.score)})`).join(', ')}`);
+                  core.info(`   📝 Content analysis: ${wordCount} words, ${templateCompliance.score}/5 template compliance`);
+                }
+                
+                // Log analysis even when no labels are added for debugging
+                const noLabelsReport = {
+                  reason: 'no_labels_selected',
+                  candidatesEvaluated: labelCandidates.length,
+                  contentAnalysis: { wordCount, templateCompliance: templateCompliance.score },
+                  sentimentAnalysis: { urgencyScore, frustrationScore, positivityScore },
+                  existingLabels: currentLabels
+                };
+                core.info(`📊 NO_LABELS_ANALYSIS: ${JSON.stringify(noLabelsReport)}`);
+              }
+              
+            } catch (error) {
+              core.warning(`Content-based labeling failed: ${error.message}`);
+            }
         continue-on-error: true
 
       - name: 🧹 Remove duplicate labels with smart deduplication
