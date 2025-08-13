@@ -70,7 +70,14 @@ jobs:
             
             // Validation checks
             if (!item) {
-              core.setFailed('No valid issue or PR found in payload');
+              console.log('ℹ️ No issue or PR found in payload');
+              console.log('Event:', context.eventName);
+              console.log('Action:', context.payload.action || 'none');
+              console.log('Available payload keys:', Object.keys(context.payload));
+              
+              // Set skip processing instead of failing
+              core.setOutput('skip-processing', 'true');
+              core.info('⏭️ Skipping processing - no valid item found');
               return;
             }
             
@@ -1103,6 +1110,11 @@ jobs:
             
             try {
               const item = context.payload.issue || context.payload.pull_request;
+              if (!item) {
+                core.info('⏭️ No item found, skipping priority labeling');
+                return;
+              }
+              
               const { title, body = '', labels } = item;
               const currentLabels = labels.map(label => label.name);
               
